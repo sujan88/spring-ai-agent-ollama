@@ -1,0 +1,55 @@
+# Started automatically by spring-boot-docker-compose on ./mvnw spring-boot:run.
+# Postgres holds vectors (pgvector), chat memory and pending actions.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: agent
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent        # local-only credentials
+    ports:
+      - "5432:5432"
+    labels:
+      org.springframework.boot.service-connection: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Local models for the default "local" profile. If you already run Ollama natively, delete this
+  # service and set spring.ai.ollama.base-url=http://localhost:11434.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+  # Optional metrics stack: docker compose --profile observability up -d
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["observability"]
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  ollama:
+    # Fixed name, so renaming or moving the project folder never re-downloads the ~5 GB of models.
+    name: ollama-models

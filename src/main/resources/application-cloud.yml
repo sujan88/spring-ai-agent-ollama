@@ -1,0 +1,19 @@
+# Cloud: OpenAI for chat and embeddings. Needs OPENAI_API_KEY in the environment.
+# Postgres still comes from docker compose locally, or from spring.datasource.* when deployed.
+spring:
+  ai:
+    model:
+      chat: openai
+      embedding: openai
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-5-mini
+          stream-usage: true      # report token usage on streamed answers
+      embedding:
+        model: text-embedding-3-small
+    vectorstore:
+      pgvector:
+        dimensions: 1536          # text-embedding-3-small
+        table-name: vector_store_openai

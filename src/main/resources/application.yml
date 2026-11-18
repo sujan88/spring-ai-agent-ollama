@@ -1,0 +1,84 @@
+# Shared settings. Provider-specific settings live in application-local.yml (Ollama) and
+# application-cloud.yml (OpenAI). No secrets in this file: keys come from environment variables.
+spring:
+  application:
+    name: spring-ai-agent-ollama
+  profiles:
+    default: local
+  # On Java 21+ you can add  spring.threads.virtual.enabled: true  for cheaper blocking I/O (model calls).
+  mvc:
+    async:
+      request-timeout: 5m       # SSE answers from a local model on CPU can take well over the 30 s default
+  docker:
+    compose:
+      lifecycle-management: start-only   # keep Postgres/Ollama running between restarts
+  ai:
+    model:
+      # Only chat + embeddings are used. Switch the rest off so no provider key is needed for them.
+      image: none
+      audio:
+        speech: none
+        transcription: none
+      moderation: none
+    chat:
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: always
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 8s
+    mcp:
+      server:
+        enabled: false          # turned on in the local profile only (the endpoint has no login)
+        name: agent-ollama-tools
+        version: 1.0.0
+        type: SYNC
+        protocol: STREAMABLE
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+app:
+  security:
+    demo-mode: false            # true lets an anonymous browser act as demo-customer-id (local only)
+    demo-customer-id: C-1001
+  orders:
+    gateway: in-memory
+  chat:
+    memory:
+      max-messages: 20
+  guardrail:
+    enabled: true
+    log-full-message: false
+  actions:
+    ttl: PT5M
+  rag:
+    enabled: true
+    admin-endpoint: false
+    docs-pattern: classpath*:/docs/kb/*.md
+    force-reload: false
+    top-k: 3
+    similarity-threshold: 0.55
+    hybrid:
+      enabled: true
+      candidates: 10
+      rrf-k: 60
+      min-term-match: 0.6
+    rerank:
+      enabled: false            # needs COHERE_API_KEY
+      model: rerank-v3.5
+      candidates: 10
+      min-score: 0.0
+      timeout-ms: 3000

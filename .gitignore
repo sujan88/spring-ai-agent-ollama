@@ -1,0 +1,20 @@
+# Build
+target/
+*.class
+
+# Secrets: never commit keys, tokens or credential notes
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.rtf
+*credentials*
+*secret*
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.bak
