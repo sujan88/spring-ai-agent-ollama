@@ -1,5 +1,7 @@
 package com.example.agent.chat;
 
+import com.example.agent.testsupport.StubChatModel;
+
 import com.example.agent.core.advisor.InputGuardrailAdvisor;
 import com.example.agent.core.security.Caller;
 import com.example.agent.model.ChatReply;
@@ -38,7 +40,7 @@ class ChatServiceTest {
                 .defaultAdvisors(new InputGuardrailAdvisor(),
                         MessageChatMemoryAdvisor.builder(MessageWindowChatMemory.builder().build()).build())
                 .build();
-        service = new ChatService(support, ChatClient.builder(model).build(), FIXED);
+        service = new ChatService(support, ChatClient.builder(model).build(), null, FIXED);
     }
 
     @Test

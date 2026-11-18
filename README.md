@@ -1,9 +1,32 @@
 # spring-ai-agent-ollama
 
 A production-style starting point for Spring AI agents. It ships with one working example (an
-order-support agent for an online shop) that shows every pattern end to end: tool calling, hybrid
-RAG with citations, chat memory, guardrails, human-confirmed actions, structured output, an MCP
-server, metrics and evals.
+order-support agent for an online shop) that shows every pattern end to end: tool calling combined
+with RAG, a full RAG pipeline (query rewriting, hybrid search, RRF, reranking, citations), chat memory,
+input and output guardrails, a grounding check, human-confirmed actions, structured output, an MCP
+server, metrics and three kinds of evals.
+
+## Feature map
+
+| Area | What is in it | Where |
+|---|---|---|
+| Tool calling | Typed `@Tool` methods; identity from ToolContext; machine-readable errors; business rules in Java | `tools/OrderTools` |
+| Tools + RAG | RAG is one more tool, so one turn can mix live data and policy ("Can I return ORD-1001?") | `rag/tool/KnowledgeBaseTool` |
+| Query rewriting | Follow-up questions become standalone search queries using chat history | `rag/query/QueryRewriter` |
+| Hybrid retrieval | PGvector + Lucene BM25, each gated for relevance, fused with Reciprocal Rank Fusion | `rag/HybridDocumentRetriever`, `rag/rrf` |
+| Reranking | Second stage over a wider candidate list: the chat model (no key) or Cohere; falls back on failure | `rag/rerank` |
+| Citations | Sources (file, score, how found) as an SSE event / JSON field | `rag/RagSourcesEvent` |
+| Ingestion | Heading-aware chunks, content-hash idempotency, pruning of deleted files | `rag/load/KnowledgeBaseLoader` |
+| Input guardrail | Prompt-injection patterns, on call **and** stream | `core/advisor/InputGuardrailAdvisor` |
+| Indirect injection | Retrieved chunks carrying instructions for the model are dropped | `core/guard/PromptInjectionDetector` |
+| Output guardrail | Card numbers / SSNs masked, even when split across stream chunks | `core/guard/OutputRedactionAdvisor` |
+| Grounding check | LLM judge: is the policy answer supported by the retrieved chunks? Shown in the UI | `core/guard/GroundingChecker` |
+| Human in the loop | Irreversible actions are drafts; a one-time token confirms; runs at most once | `core/confirm` |
+| Memory | Windowed, per user and conversation, in Postgres | `core/memory` |
+| Structured output | Model fills a Java record | `/api/chat/triage` |
+| Observability | Token counters, per-tool timers, per-request tool log, Prometheus | `core/advisor/TokenUsageAuditAdvisor`, `core/tool` |
+| MCP | Server exposing read-only tools | `mcp` |
+| Evals | Retrieval (hit@k, MRR), answer relevancy + faithfulness, tool choice + safety cases | `src/test`, `-Pevals`, `.github/workflows/evals.yml` |
 
 Copy it, replace the example domain, keep the core.
 
@@ -19,7 +42,7 @@ flowchart LR
     ID --> CS[ChatService]
     CS -->|toolContext + conversation id| CL[support ChatClient]
     subgraph Advisors
-        G[InputGuardrail] --> M[ChatMemory] --> A[TokenAudit] --> T[ToolCallingAdvisor<br/>tool loop]
+        G[InputGuardrail] --> R[OutputRedaction] --> M[ChatMemory] --> A[TokenAudit] --> T[ToolCallingAdvisor<br/>tool loop]
     end
     CL --> G
     T <-->|prompt / tokens| LLM[(Ollama or OpenAI)]
@@ -28,7 +51,10 @@ flowchart LR
     OT --> GW[OrderGateway port<br/>in-memory adapter]
     OT -->|draft only| PA[PendingActionService]
     UI -->|Confirm + one-time token| PAC[PendingActionController] --> PA
-    KB --> HR[Hybrid retriever<br/>vector + BM25 → RRF → rerank]
+    KB --> QR[QueryRewriter<br/>follow-up → standalone]
+    QR --> HR[Hybrid retriever<br/>vector + BM25 → RRF → rerank]
+    HR --> IF[Injection filter] --> KB
+    CS -->|answer + chunks| GC[GroundingChecker<br/>LLM judge]
     HR --> PG[(Postgres + pgvector)]
     M --> PG
     PA --> PG
@@ -37,11 +63,12 @@ flowchart LR
 | Package | What it holds | Reuse as is? |
 |---|---|---|
 | `core/advisor` | Input guardrail, token audit (both call **and** stream) | Yes |
+| `core/guard` | Injection detector, output redaction, grounding check | Yes |
 | `core/memory` | Windowed JDBC chat memory | Yes |
 | `core/security` | Caller identity and conversation scope | Yes, then add real auth |
 | `core/confirm` | Draft → review → confirm for irreversible actions | Yes |
-| `core/tool` | ToolContext keys | Yes |
-| `rag` | Loader, BM25 index, hybrid retriever, RRF, reranker, RAG tool | Yes |
+| `core/tool` | ToolContext keys, tool-call observation and log | Yes |
+| `rag` | Loader, query rewriter, BM25 index, hybrid retriever, RRF, rerankers, RAG tool | Yes |
 | `config/AiConfig` | ChatClient beans | Edit tools and prompt |
 | `chat` | REST + SSE endpoints | Usually as is |
 | `orders`, `tools` | **Example domain**: port, adapter, @Tool methods, executor | Replace |
@@ -120,9 +147,13 @@ and Grafana on :3000.
 # Streaming chat (SSE): data {"t":"..."} per token, then {"sources":[...]} if the knowledge base was used
 curl -N "localhost:8080/api/chat/stream?conversation=demo&message=What%20are%20my%20orders%3F"
 
-# Plain JSON chat with citations
-curl -s localhost:8080/api/chat -H 'Content-Type: application/json' \
-  -d '{"conversation":"demo","message":"How long do card refunds take?"}'
+# Plain JSON chat: answer + sources (citations) + toolCalls + grounding verdict
+curl -s -c jar -b jar localhost:8080/api/chat -H 'Content-Type: application/json' \
+  -d '{"conversation":"demo","message":"How much is express shipping?"}'
+
+# Follow-up: rewritten to a standalone query before searching (see "Query rewritten" in the log)
+curl -s -c jar -b jar localhost:8080/api/chat -H 'Content-Type: application/json' \
+  -d '{"conversation":"demo","message":"And how long does it take?"}'
 
 # Cancellation is a draft until a human confirms with the one-time token
 curl -s -c jar -b jar localhost:8080/api/chat -H 'Content-Type: application/json' \
@@ -164,8 +195,19 @@ login, which is why it is off outside the local profile.
 ```bash
 ./mvnw test                       # unit tests: no network, no Docker
 ./mvnw verify                     # + RagIT: real PGvector in Testcontainers, offline embeddings
-OPENAI_API_KEY=... ./mvnw verify -Pevals   # + EvalIT: real model, RelevancyEvaluator, pass rate >= 80%
+OPENAI_API_KEY=... ./mvnw verify -Pevals   # model-based evals only (EvalIT, ToolTrajectoryEvalIT)
 ```
+
+Three layers of evaluation:
+
+| Layer | Question it answers | How |
+|---|---|---|
+| Retrieval | Do we find the right chunk? | Golden questions; hit@k, MRR, gate leaks (`Bm25GoldenSetTest`, `RagIT`) |
+| Answers | Is the answer relevant, and is every policy claim supported by the chunks? | `EvalIT`: Spring AI `RelevancyEvaluator` + `GroundingChecker` (faithfulness), both >= 80% |
+| Agent behaviour | Does it call the right tools, and never the dangerous ones? | `ToolTrajectoryEvalIT`: cases in `agent-eval/tool-trajectories.json`; safety cases must all pass |
+
+In GitHub, the **Evals** workflow runs `-Pevals` by hand or weekly, when the repository secret
+`OPENAI_API_KEY` is set. Normal CI (`ci.yml`) never calls a paid model.
 
 | Test | Proves |
 |---|---|
@@ -177,7 +219,14 @@ OPENAI_API_KEY=... ./mvnw verify -Pevals   # + EvalIT: real model, RelevancyEval
 | `Bm25*`, `HybridDocumentRetrieverTest`, `ReciprocalRankFusionTest`, `Rerank*` | Keyword search, gates, fusion, reranker fallback |
 | `GoldenSetTest`, `Bm25GoldenSetTest` | The golden set matches the real docs and chunking; keyword recall and gate leaks |
 | `RagIT` | Ingestion, idempotent re-ingestion and hybrid retrieval on a real PGvector |
-| `EvalIT` | End-to-end answer relevancy with a real model |
+| `QueryRewriterTest` | Follow-ups use the history; first turns cost no model call; failures fall back to the original question |
+| `LlmRerankerTest` | Structured scores parsed and validated; failures throw so retrieval falls back |
+| `KnowledgeBaseToolTest` | Citations recorded; injected chunks dropped; the rewritten query is what gets searched |
+| `PiiRedactorTest`, `OutputRedactionAdvisorTest` | Cards (Luhn) and SSNs masked, other numbers kept, no digits leak when a number is split across stream chunks |
+| `GroundingCheckerTest` | Unsupported claims reported with a reason; no context means no call; failures never throw |
+| `ObservedToolCallbackTest` | Every tool call is logged, timed and recorded per request |
+| `EvalIT` | Answer relevancy and faithfulness with a real model |
+| `ToolTrajectoryEvalIT` | Tool choice and safety: injected or invalid cancellations never leave a draft |
 
 ## Design decisions (and why)
 
@@ -196,7 +245,13 @@ OPENAI_API_KEY=... ./mvnw verify -Pevals   # + EvalIT: real model, RelevancyEval
    advisors on streaming endpoints, so a guardrail written that way protects nothing on `/stream`.
 6. **One Postgres for everything.** Vectors, chat memory and pending actions share one database:
    fewer moving parts, and the template stays stateless, so it can run more than one instance.
-7. **Defaults:** chunks of at most 3,500 characters, never split mid-section; top-k 3; similarity
+7. **Every AI step after the answer is advisory or fails safe.** Query rewriting, reranking and the
+   grounding check each add a model call, so each can be switched off, and any failure falls back
+   (original query, fused order, "not checked") instead of breaking the chat.
+8. **Output checks are deterministic where they can be.** Card and SSN masking is a regex with a
+   Luhn check, not a model, so it is fast and cannot be talked out of. The grounding judge is the one
+   place a model checks a model, and it only reports; it never rewrites the answer.
+9. **Defaults:** chunks of at most 3,500 characters, never split mid-section; top-k 3; similarity
    threshold 0.55; keyword gate 60%; memory window 20 messages. Each is a property. Change it, then
    re-run `RagIT` and `EvalIT`.
 
@@ -213,13 +268,19 @@ OPENAI_API_KEY=... ./mvnw verify -Pevals   # + EvalIT: real model, RelevancyEval
 ## Known limits
 
 - No authentication is included; demo mode is for local use only.
-- The regex guardrail is a cheap first layer. Add a moderation model or a classifier for public traffic.
+- The regex guardrails (input and retrieved chunks) are a cheap first layer. Add a moderation model or a classifier for public traffic.
+- Query rewriting, LLM reranking and the grounding check each add one model call. With Ollama in Docker
+  (no GPU) that is slow, so LLM reranking is off in the local profile and on in the cloud profile.
+- The grounding check streams its verdict after the answer; it warns, it does not block or rewrite.
 - `TokenUsageAuditAdvisor` keeps per-conversation totals in memory, so they reset on restart. The Prometheus counters are the durable record.
 - The MCP server is unauthenticated, so it is enabled only in the local profile.
 - Small local models follow tool instructions less reliably than cloud models. Use the cloud profile for evals.
 
 ## Next steps
 
-- Agentic multi-step workflows (plan, act, check) on top of the same tools.
+- Agentic workflows on top of the same tools: a router between specialist agents, or an
+  evaluator-optimizer loop that redrafts an answer the grounding check rejects.
+- An MCP client, so the agent can use tools from other MCP servers (GitHub, Jira, …).
+- Long-term memory: summarise old turns instead of only dropping them from the window.
 - A second knowledge base (another folder and table) for internal engineering docs.
 - Per-tenant token budgets enforced in `TokenUsageAuditAdvisor`, with Grafana alerts.

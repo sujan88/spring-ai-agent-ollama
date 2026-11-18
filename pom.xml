@@ -150,8 +150,8 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
                     <excludes>
-                        <!-- Calls a real model and costs money: run with -Pevals -->
-                        <exclude>**/EvalIT.java</exclude>
+                        <!-- EvalIT, ToolTrajectoryEvalIT: call a real model and cost money. Run with -Pevals -->
+                        <exclude>**/*EvalIT.java</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -219,7 +219,7 @@
                         <configuration>
                             <excludes combine.self="override"/>
                             <includes>
-                                <include>**/EvalIT.java</include>
+                                <include>**/*EvalIT.java</include>
                             </includes>
                         </configuration>
                     </plugin>

@@ -27,8 +27,18 @@ Drop a `.md` file into `src/main/resources/docs/kb/`. Use `## ` headings; sectio
 Add golden questions for it in `src/test/resources/rag-eval/golden-questions.json`; `GoldenSetTest`
 checks that every expected phrase sits inside one real chunk.
 
+## Pipeline (one chat turn)
+InputGuardrail -> OutputRedaction -> ChatMemory -> TokenAudit -> ToolCallingAdvisor (tools wrapped in
+ObservedToolCallback) -> searchKnowledgeBase: QueryRewriter -> hybrid retrieval (BM25 + vector, gates,
+RRF) -> optional rerank (llm | cohere) -> injection filter -> answer -> GroundingChecker (only if RAG ran).
+
 ## Rules
 - No secrets in files. Keys come from environment variables (`.env.example`).
 - New advisors implement both `CallAdvisor` and `StreamAdvisor`, or they are skipped on `/stream`.
 - Advisor order: guardrail (HIGHEST) < memory (+200) < token audit (+250) < ToolCallingAdvisor (+300).
 - Keep the MCP server off outside the local profile until it has authentication.
+- Extra model calls (query rewrite, rerank, grounding) must fail safe: fall back, never break the chat.
+- Tools are registered through `ObservedToolCallback.wrap(...)` in AiConfig; don't bypass it, the
+  per-request ToolCallLog and the trajectory evals depend on it.
+- New safety-relevant behaviour gets a case in `src/test/resources/agent-eval/tool-trajectories.json`
+  (mark it `"critical": true`).

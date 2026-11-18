@@ -1,5 +1,6 @@
 package com.example.agent.core.advisor;
 
+import com.example.agent.core.guard.PromptInjectionDetector;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -20,10 +21,9 @@ import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
- * First line of defence against prompt injection: a set of regex families checked before the model
+ * First line of defence against prompt injection: PromptInjectionDetector's regex families, checked before the model
  * is called. A match returns a fixed refusal and the LLM is never called, so a blocked prompt costs
  * no tokens.
  *
@@ -42,27 +42,6 @@ public class InputGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
             "I'm not able to process that request. " +
             "I can help with questions about your orders, returns and shipping. " +
             "What would you like to do?";
-
-    static final List<InjectionPattern> PATTERNS = List.of(
-            new InjectionPattern("INSTRUCTION_OVERRIDE",
-                    Pattern.compile("(?i)\\b(ignore|disregard|forget|override|bypass)\\b.{0,30}\\b(previous|prior|above|system|all)\\b.{0,20}\\b(instructions?|prompts?|rules?|constraints?)\\b")),
-            new InjectionPattern("ROLE_OVERRIDE",
-                    Pattern.compile("(?i)\\b(you are now|act as|pretend to be|roleplay as|behave as|from now on you)\\b.{0,50}")),
-            // Targets the assistant's own prompt only. The lab version also matched "rules"/"context" alone,
-            // which refused ordinary questions such as "can you show me the return rules?".
-            new InjectionPattern("PROMPT_EXTRACTION",
-                    Pattern.compile("(?i)\\b(reveal|show|display|print|output|repeat|echo)\\b.{0,30}\\b(system prompt|hidden prompt|initial prompt|your (instructions|rules|prompt|context))\\b")),
-            new InjectionPattern("NEW_RULES",
-                    Pattern.compile("(?i)\\b(new rules|new instructions|updated prompt|revised instructions|here are your new)\\b")),
-            new InjectionPattern("JAILBREAK",
-                    Pattern.compile("(?i)\\b(DAN|do anything now|jailbreak|developer mode|unrestricted mode|god mode)\\b")),
-            new InjectionPattern("ENCODED_PAYLOAD",
-                    Pattern.compile("(?i)(base64|\\beval\\b|\\bdecode\\b).{0,20}(aWdub3Jl|SWdub3Jl|cHJvbXB0)")),
-            new InjectionPattern("DELIMITER_INJECTION",
-                    Pattern.compile("(?i)(\\[SYSTEM\\]|\\[INST\\]|<\\|im_start\\|>|<\\|system\\|>|###\\s*(System|Assistant|Human))")),
-            new InjectionPattern("SAFETY_BYPASS",
-                    Pattern.compile("(?i)\\b(ignore safety|disable filter|remove restriction|no censorship|without guidelines|bypass safety)\\b"))
-    );
 
     private final boolean enabled;
     private final boolean logFullMessage;
@@ -96,7 +75,7 @@ public class InputGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
         if (!enabled) return Optional.empty();
         String text = lastUserMessage(request);
         if (text == null || text.isBlank()) return Optional.empty();
-        return PATTERNS.stream().filter(p -> p.pattern().matcher(text).find()).map(InjectionPattern::name).findFirst()
+        return PromptInjectionDetector.firstMatch(text)
                 .map(name -> {
                     log.warn("GUARDRAIL TRIGGERED: pattern={}, snippet=\"{}\"", name, logFullMessage ? text : truncate(text, 80));
                     return name;
@@ -131,5 +110,4 @@ public class InputGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
         return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
     }
 
-    record InjectionPattern(String name, Pattern pattern) {}
 }

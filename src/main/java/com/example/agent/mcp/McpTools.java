@@ -44,7 +44,7 @@ public class McpTools {
             + "cancellations, error codes) and return the matching passages with their source file.")
     public KnowledgeBaseResult searchPolicies(@ToolParam(description = "The question, in plain words") String question) {
         KnowledgeBaseTool kb = knowledgeBase.getIfAvailable();
-        if (kb == null) return new KnowledgeBaseResult(false, "RAG is disabled on this server.", List.of());
+        if (kb == null) return new KnowledgeBaseResult(false, "RAG is disabled on this server.", question, List.of());
         return kb.search(question, null, KnowledgeBaseTool.NOT_FOUND);
     }
 }

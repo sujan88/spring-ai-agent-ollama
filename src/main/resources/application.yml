@@ -62,6 +62,11 @@ app:
   guardrail:
     enabled: true
     log-full-message: false
+  guard:
+    redact-output:
+      enabled: true             # mask card numbers / SSNs in answers (call + stream)
+    grounding:
+      enabled: true             # judge policy answers against the retrieved chunks (1 extra model call, only when RAG was used)
   actions:
     ttl: PT5M
   rag:
@@ -71,14 +76,18 @@ app:
     force-reload: false
     top-k: 3
     similarity-threshold: 0.55
+    query-rewrite:
+      enabled: true             # follow-up questions -> standalone search query (1 extra call, only when there is history)
+      history-messages: 6
     hybrid:
       enabled: true
       candidates: 10
       rrf-k: 60
       min-term-match: 0.6
     rerank:
-      enabled: false            # needs COHERE_API_KEY
-      model: rerank-v3.5
+      enabled: false            # adds a model call per search; fast with native Ollama or OpenAI, slow with Ollama in Docker
+      provider: llm             # llm = rerank with the chat model (no key) | cohere = Cohere Rerank (COHERE_API_KEY)
+      model: rerank-v3.5        # Cohere model, used when provider=cohere
       candidates: 10
       min-score: 0.0
-      timeout-ms: 3000
+      timeout-ms: 20000         # LLM reranking is slower than Cohere (3000 is plenty there)

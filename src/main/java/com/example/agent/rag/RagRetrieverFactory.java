@@ -55,7 +55,8 @@ public final class RagRetrieverFactory {
     public static String describe(RagHybridSettings hybrid, RagRerankSettings rerank, boolean rerankerPresent) {
         String first = hybrid.enabled() ? "hybrid: BM25 + vector, fused with RRF (k=" + hybrid.rrfK() + ")" : "vector only";
         return first + (rerank.enabled() && rerankerPresent
-                ? ", then rerank " + rerank.candidates() + " candidates with " + rerank.model()
+                ? ", then rerank " + rerank.candidates() + " candidates with "
+                        + ("llm".equals(rerank.provider()) ? "the chat model" : "Cohere " + rerank.model())
                 : "");
     }
 }

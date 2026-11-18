@@ -17,3 +17,8 @@ spring:
       pgvector:
         dimensions: 1536          # text-embedding-3-small
         table-name: vector_store_openai
+
+app:
+  rag:
+    rerank:
+      enabled: true             # OpenAI is fast enough to rerank every search with the chat model
